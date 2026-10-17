@@ -86,16 +86,27 @@ jobs:
       - name: 整理可安装包
         shell: pwsh
         run: |
-          $bundle = Get-ChildItem -Path build-output -Recurse -Filter *.appxbundle | Select-Object -First 1
-          if (-not $bundle) { $bundle = Get-ChildItem -Path build-output -Recurse -Filter *.appx | Select-Object -First 1 }
-          if (-not $bundle) { throw 'build-output 里没有 .appxbundle / .appx' }
+          $bundle = Get-ChildItem -Path build-output -Recurse -Filter *.appxbundle |
+                    Where-Object { $_.FullName -notmatch '\\Dependencies\\' } | Select-Object -First 1
+          if (-not $bundle) {
+            $bundle = Get-ChildItem -Path build-output -Recurse -Filter *.appx |
+                      Where-Object { $_.FullName -notmatch '\\Dependencies\\' } | Select-Object -First 1
+          }
+          if (-not $bundle) { throw 'build-output 里没有主包（.appxbundle / .appx）' }
 
-          $ver = (Get-ChildItem "$env:GITHUB_WORKSPACE\TTTTile\Package.appxmanifest" |
-                  Select-Xml -XPath '//*[local-name()="Identity"]').Node.Version
+          $ver = (Select-Xml -Path "$env:GITHUB_WORKSPACE\TTTTile\Package.appxmanifest" `
+                             -XPath '//*[local-name()="Identity"]').Node.Version
           $stage = Join-Path $env:GITHUB_WORKSPACE "stage\TTTTile_${ver}_x64"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
-          Copy-Item "$($bundle.Directory.FullName)\*" $stage -Recurse -Force
+          # 只带 x64 依赖，减小体积
+          Copy-Item $bundle.FullName $stage -Force
+          $dep = Join-Path $bundle.Directory.FullName 'Dependencies'
+          if (Test-Path $dep) {
+            $dst = Join-Path $stage 'Dependencies'
+            New-Item -ItemType Directory -Force -Path $dst | Out-Null
+            Copy-Item (Join-Path $dep 'x64') $dst -Recurse -Force
+          }
           Copy-Item "$env:GITHUB_WORKSPACE\certs\TTTTile.cer" $stage -Force
           Copy-Item "$env:GITHUB_WORKSPACE\packaging\Install.ps1" $stage -Force
 
@@ -104,6 +115,7 @@ jobs:
 
           "ZIP_PATH=$zip" >> $env:GITHUB_ENV
           "APP_VERSION=$ver" >> $env:GITHUB_ENV
+          "BUNDLE_PATH=$($bundle.FullName)" >> $env:GITHUB_ENV
 
           Write-Host ''
           Write-Host "产物 $([IO.Path]::GetFileName($zip))（$([math]::Round((Get-Item $zip).Length/1MB,1)) MB）："
@@ -115,17 +127,17 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.sign != false
         shell: pwsh
         run: |
-          $sig = Get-AuthenticodeSignature $env:ZIP_PATH   # zip 本身不签名，正常返回 NotSigned
-          $appx = Get-ChildItem build-output -Recurse -Include *.appxbundle,*.appx | Select-Object -First 1
-          $s = Get-AuthenticodeSignature $appx.FullName
+          $s = Get-AuthenticodeSignature $env:BUNDLE_PATH
+          Write-Host "包     ：$([IO.Path]::GetFileName($env:BUNDLE_PATH))"
           Write-Host "签名状态：$($s.Status)"
           Write-Host "签名者  ：$($s.SignerCertificate.Subject)"
           Write-Host "指纹    ：$($s.SignerCertificate.Thumbprint)"
-          if ($s.Status -ne 'UnknownError' -and $s.Status -ne 'Valid') {
-            throw "包签名异常：$($s.Status)"
-          }
+          if (-not $s.SignerCertificate) { throw '包未签名（SignerCertificate 为空）' }
           if ($s.SignerCertificate.Subject -ne 'CN=F3rcc') {
             throw "签名者 Subject 是 '$($s.SignerCertificate.Subject)'，不是 CN=F3rcc"
+          }
+          if ($s.SignerCertificate.Thumbprint -ne 'CDB3C7803C6ECD5E1FE511A03FA4DA6CDD2216EA') {
+            throw "签名证书指纹不匹配：$($s.SignerCertificate.Thumbprint)"
           }
 
       - name: 写构建摘要
@@ -137,14 +149,14 @@ jobs:
             ''
             "- 版本：``$env:APP_VERSION``"
             "- 平台：``x64`` / Release / AppxBundle"
-            "- 签名：$(if ($env:PFX_PATH) { '✅ 已签名 CN=F3rcc' } else { '⚠️ 未签名（仅编译验证）' })"
+            "- 签名：$(if ($env:PFX_PATH) { '已签名 CN=F3rcc（指纹 CDB3C780…16EA）' } else { '未签名（仅编译验证）' })"
             "- 产物：``$(if ($env:ZIP_PATH) { [IO.Path]::GetFileName($env:ZIP_PATH) } else { '（打包步骤失败）' })``"
             ''
             '安装：解压后右键 `Install.ps1` → 使用 PowerShell 运行（会请求管理员）。'
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: 上传产物
-        if: ${{ env.ZIP_PATH != '' }}
+        if: env.ZIP_PATH != ''
         uses: actions/upload-artifact@v4
         with:
           name: TTTTile-x64-${{ env.APP_VERSION }}
