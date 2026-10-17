@@ -8,14 +8,14 @@
 
   <Identity
     Name="46e79dbd-6853-4213-a215-84f6e22fb6b0"
-    Publisher="CN=Zhang"
+    Publisher="CN=F3rcc"
     Version="1.1.0.0" />
 
   <mp:PhoneIdentity PhoneProductId="46e79dbd-6853-4213-a215-84f6e22fb6b0" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
     <DisplayName>TTTTile</DisplayName>
-    <PublisherDisplayName>Zhang</PublisherDisplayName>
+    <PublisherDisplayName>F3rcc</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 

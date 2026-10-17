@@ -19,7 +19,11 @@
     <WindowsXamlEnableOverview>true</WindowsXamlEnableOverview>
     <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
     <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
-    <PackageCertificateKeyFile>TTTTile_TemporaryKey.pfx</PackageCertificateKeyFile>
+    <!-- 签名证书：CI 通过 /p:PackageCertificateKeyFile 覆盖；本地默认 certs\TTTTile.pfx（.pfx 已被 .gitignore 排除） -->
+    <PackageCertificateKeyFile Condition="'$(PackageCertificateKeyFile)' == ''">..\certs\TTTTile.pfx</PackageCertificateKeyFile>
+    <!-- 证书密码只从环境变量 PFX_PASSWORD 读；本地没设时退回 certs\pfx-password.txt（该文件不提交） -->
+    <PackageCertificatePassword Condition="'$(PFX_PASSWORD)' != ''">$(PFX_PASSWORD)</PackageCertificatePassword>
+    <PackageCertificatePassword Condition="'$(PackageCertificatePassword)' == '' and Exists('$(MSBuildProjectDirectory)\..\certs\pfx-password.txt')">$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\..\certs\pfx-password.txt').Trim())</PackageCertificatePassword>
     <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
     <AppxAutoIncrementPackageRevision>False</AppxAutoIncrementPackageRevision>
     <AppxSymbolPackageEnabled>False</AppxSymbolPackageEnabled>
@@ -238,7 +242,7 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <None Include="TTTTile_TemporaryKey.pfx" />
+    <None Include="..\certs\TTTTile.pfx" Condition="Exists('..\certs\TTTTile.pfx')" />
   </ItemGroup>
   <PropertyGroup Condition=" '$(VisualStudioVersion)' == '' or '$(VisualStudioVersion)' &lt; '14.0' ">
     <VisualStudioVersion>14.0</VisualStudioVersion>

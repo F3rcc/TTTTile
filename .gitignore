@@ -361,3 +361,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# === TTTTile: 本地签名密钥与构建产物（绝不提交私钥） ===
+certs/*.pfx
+certs/pfx-password.txt
+*.appxupload
+AppPackages/
+build-output/

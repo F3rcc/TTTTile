@@ -1,0 +1,153 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: '用仓库 Secret 里的证书签名（关掉只做编译验证，产物不可安装）'
+        type: boolean
+        default: true
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'certs/**'
+      - 'packaging/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Release x64
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: 还原 NuGet 包
+        run: msbuild TTTTile.sln -t:Restore -p:Configuration=Release -p:Platform=x64 -v:m
+
+      - name: 恢复签名证书
+        if: ${{ inputs.sign != false }}
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.PFX_BASE64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PFX_BASE64)) {
+            throw '缺少仓库 Secret: PFX_BASE64。把 certs/TTTile.pfx 转成 base64 后添加。'
+          }
+          $dir = Join-Path $env:RUNNER_TEMP 'signing'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $pfx = Join-Path $dir 'TTTTile.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+          "PFX_PATH=$pfx" >> $env:GITHUB_ENV
+          Write-Host "证书已写入 $pfx（$((Get-Item $pfx).Length) 字节）"
+
+      - name: 编译并打包
+        shell: pwsh
+        env:
+          PFX_PASSWORD: ${{ secrets.PFX_PASSWORD }}
+        run: |
+          $outDir = Join-Path $env:GITHUB_WORKSPACE 'build-output'
+          $a = @(
+            'TTTTile.sln'
+            '/p:Configuration=Release'
+            '/p:Platform=x64'
+            '/p:AppxBundle=Always'
+            '/p:AppxBundlePlatforms=x64'
+            '/p:UapAppxPackageBuildMode=SideloadOnly'
+            "/p:AppxPackageDir=$outDir\"
+            '/p:BuildInParallel=true'
+            '/m'
+            '-v:m'
+          )
+          if ($env:PFX_PATH) {
+            $a += "/p:PackageCertificateKeyFile=$env:PFX_PATH"
+            $a += '/p:AppxPackageSigningEnabled=true'
+            Write-Host "签名：$env:PFX_PATH"
+          } else {
+            $a += '/p:AppxPackageSigningEnabled=false'
+            Write-Host '未签名构建（产物仅用于验证能否编译）'
+          }
+          & msbuild @a
+          if ($LASTEXITCODE -ne 0) { throw "msbuild 失败，退出码 $LASTEXITCODE" }
+
+      - name: 整理可安装包
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -Path build-output -Recurse -Filter *.appxbundle | Select-Object -First 1
+          if (-not $bundle) { $bundle = Get-ChildItem -Path build-output -Recurse -Filter *.appx | Select-Object -First 1 }
+          if (-not $bundle) { throw 'build-output 里没有 .appxbundle / .appx' }
+
+          $ver = (Get-ChildItem "$env:GITHUB_WORKSPACE\TTTTile\Package.appxmanifest" |
+                  Select-Xml -XPath '//*[local-name()="Identity"]').Node.Version
+          $stage = Join-Path $env:GITHUB_WORKSPACE "stage\TTTTile_${ver}_x64"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+
+          Copy-Item "$($bundle.Directory.FullName)\*" $stage -Recurse -Force
+          Copy-Item "$env:GITHUB_WORKSPACE\certs\TTTTile.cer" $stage -Force
+          Copy-Item "$env:GITHUB_WORKSPACE\packaging\Install.ps1" $stage -Force
+
+          $zip = Join-Path $env:GITHUB_WORKSPACE "TTTTile_${ver}_x64.zip"
+          Compress-Archive -Path "$stage\*" -DestinationPath $zip -Force
+
+          "ZIP_PATH=$zip" >> $env:GITHUB_ENV
+          "APP_VERSION=$ver" >> $env:GITHUB_ENV
+
+          Write-Host ''
+          Write-Host "产物 $([IO.Path]::GetFileName($zip))（$([math]::Round((Get-Item $zip).Length/1MB,1)) MB）："
+          Get-ChildItem $stage -Recurse -File | ForEach-Object {
+            Write-Host ('  {0,10:N0}  {1}' -f $_.Length, $_.FullName.Substring($stage.Length + 1))
+          }
+
+      - name: 验证签名
+        if: ${{ inputs.sign != false }}
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature $env:ZIP_PATH   # zip 本身不签名，正常返回 NotSigned
+          $appx = Get-ChildItem build-output -Recurse -Include *.appxbundle,*.appx | Select-Object -First 1
+          $s = Get-AuthenticodeSignature $appx.FullName
+          Write-Host "签名状态：$($s.Status)"
+          Write-Host "签名者  ：$($s.SignerCertificate.Subject)"
+          Write-Host "指纹    ：$($s.SignerCertificate.Thumbprint)"
+          if ($s.Status -ne 'UnknownError' -and $s.Status -ne 'Valid') {
+            throw "包签名异常：$($s.Status)"
+          }
+          if ($s.SignerCertificate.Subject -ne 'CN=F3rcc') {
+            throw "签名者 Subject 是 '$($s.SignerCertificate.Subject)'，不是 CN=F3rcc"
+          }
+
+      - name: 写构建摘要
+        if: always()
+        shell: pwsh
+        run: |
+          @(
+            '## TTTTile build'
+            ''
+            "- 版本：``$env:APP_VERSION``"
+            "- 平台：``x64`` / Release / AppxBundle"
+            "- 签名：$(if ($env:PFX_PATH) { '✅ 已签名 CN=F3rcc' } else { '⚠️ 未签名（仅编译验证）' })"
+            "- 产物：``$(if ($env:ZIP_PATH) { [IO.Path]::GetFileName($env:ZIP_PATH) } else { '（打包步骤失败）' })``"
+            ''
+            '安装：解压后右键 `Install.ps1` → 使用 PowerShell 运行（会请求管理员）。'
+          ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+
+      - name: 上传产物
+        if: ${{ env.ZIP_PATH != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TTTTile-x64-${{ env.APP_VERSION }}
+          path: ${{ env.ZIP_PATH }}
+          if-no-files-found: error
+          retention-days: 30
