@@ -39,7 +39,7 @@ jobs:
         run: msbuild TTTTile.sln -t:Restore -p:Configuration=Release -p:Platform=x64 -v:m
 
       - name: 恢复签名证书
-        if: ${{ inputs.sign != false }}
+        if: github.event_name != 'workflow_dispatch' || inputs.sign != false
         shell: pwsh
         env:
           PFX_BASE64: ${{ secrets.PFX_BASE64 }}
@@ -112,7 +112,7 @@ jobs:
           }
 
       - name: 验证签名
-        if: ${{ inputs.sign != false }}
+        if: github.event_name != 'workflow_dispatch' || inputs.sign != false
         shell: pwsh
         run: |
           $sig = Get-AuthenticodeSignature $env:ZIP_PATH   # zip 本身不签名，正常返回 NotSigned
