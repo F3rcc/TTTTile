@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     安装 TTTTile（自签名 sideload 包）。
@@ -117,12 +117,13 @@ if (-not $CertificatePath -or -not (Test-Path $CertificatePath)) {
 $CertificatePath = (Resolve-Path $CertificatePath).Path
 
 $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 $CertificatePath
-$sha256 = ($cert.GetCertHashString('SHA256') -replace '(.{2})(?!$)', '$1')
+$sha256 = $cert.GetCertHashString('SHA256')
 if ($cert.Subject -ne $ExpectedSubject) {
     throw "证书 Subject 是 '$($cert.Subject)'，预期 '$ExpectedSubject'，拒绝安装。"
 }
 if ($sha256 -ne $ExpectedSha256) {
-    throw "证书 SHA-256 指纹不匹配！`n  实际：$sha256`n  预期：$ExpectedSha256`n若你确认这是你自己重签的证书，请更新脚本里的 ExpectedSha256。"
+    $pretty = ($sha256 -replace '(.{2})(?!$)', '$1')
+    throw "证书 SHA-256 指纹不匹配！`n  实际：$pretty`n  预期：$ExpectedSha256`n若你确认这是你自己重签的证书，请更新脚本里的 ExpectedSha256。"
 }
 
 $store = 'Cert:\LocalMachine\TrustedPeople'
